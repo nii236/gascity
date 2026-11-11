@@ -168,6 +168,15 @@ func (a SessionLogAdapter) OpenCodeTailUsage(path, cursorID string) ([]sessionlo
 	return sessionlog.ExtractOpenCodeTailUsageFromSearchPaths(a.SearchPaths, path)
 }
 
+// PiTailUsage reads per-invocation token usage from a pi or omp session
+// transcript. Validation merges the pi session roots with the configured
+// search paths. cursorID is accepted for signature symmetry with TailUsage: the
+// transcript is parsed whole and the caller's cursor filter decides what is new.
+func (a SessionLogAdapter) PiTailUsage(path, cursorID string) ([]sessionlog.TailUsage, error) {
+	_ = cursorID
+	return sessionlog.ExtractPiTailUsageFromSearchPaths(a.SearchPaths, path)
+}
+
 // InvocationUsage reads per-invocation token usage from a discovered
 // transcript using the SAME extractor the prompt-op telemetry gate uses for
 // the provider's invocation-usage family (invocationUsageSpecs). It returns
