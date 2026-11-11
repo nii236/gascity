@@ -34,9 +34,8 @@ func TestActivityGetLastActivityResolvesRewrittenNames(t *testing.T) {
 			f, sock := newFakeHerdrServer(t)
 			f.setAgents(agentInfo{Name: herdrAgentName(name), PaneID: "%1", AgentStatus: "idle", Revision: 1})
 			p := activityTestProvider(t, sock)
-			if got := lastActivity(t, p, name); got.IsZero() {
-				t.Fatalf("GetLastActivity(%q) = zero; want the stamp tracked under %q", name, herdrAgentName(name))
-			}
+			// Seen at rest, the stamp reads once a later poll confirms it.
+			confirmedActivity(t, p, name)
 		})
 	}
 }

@@ -62,6 +62,13 @@ func waitActivity(t *testing.T, p *Provider, name string, timeout time.Duration,
 	}
 }
 
+// confirmedActivity waits for the stamp of a session first observed at rest:
+// its first observation reads zero until a later poll confirms it.
+func confirmedActivity(t *testing.T, p *Provider, name string) time.Time {
+	t.Helper()
+	return waitActivity(t, p, name, 2*time.Second, func(got time.Time) bool { return !got.IsZero() })
+}
+
 // assertWorkingContinuouslyActive is the working leg of the activity contract,
 // run once name has been reported working: wait for a poll to observe the
 // transition, then require successive reads to keep advancing. preTransition is
@@ -192,10 +199,7 @@ func TestActivityReplayedStatusEventsDoNotRefreshStamp(t *testing.T) {
 	f, sock := newFakeHerdrServer(t)
 	f.setAgents(agentInfo{Name: "a", PaneID: "%1", AgentStatus: "idle", Revision: 1})
 	p := activityTestProvider(t, sock)
-	seeded := lastActivity(t, p, "a") // first observation stamps once
-	if seeded.IsZero() {
-		t.Fatal("seed poll must stamp first observation")
-	}
+	seeded := confirmedActivity(t, p, "a") // first observation stamps once
 
 	// The tracker's self-subscription reaches the fake; replay the same
 	// (already-current) status at it repeatedly.
@@ -218,7 +222,7 @@ func TestActivityUnknownStatusStampsOnRevisionChange(t *testing.T) {
 	f, sock := newFakeHerdrServer(t)
 	f.setAgents(agentInfo{Name: "sh", PaneID: "%1", AgentStatus: "unknown", Revision: 7})
 	p := activityTestProvider(t, sock)
-	seeded := lastActivity(t, p, "sh")
+	seeded := confirmedActivity(t, p, "sh")
 
 	time.Sleep(20 * time.Millisecond)
 	f.setAgents(agentInfo{Name: "sh", PaneID: "%1", AgentStatus: "unknown", Revision: 8})
@@ -240,7 +244,7 @@ func TestActivityDetectedIdleRevisionTickDoesNotStamp(t *testing.T) {
 	f, sock := newFakeHerdrServer(t)
 	f.setAgents(agentInfo{Name: "a", PaneID: "%1", AgentStatus: "idle", Revision: 1})
 	p := activityTestProvider(t, sock)
-	seeded := lastActivity(t, p, "a")
+	seeded := confirmedActivity(t, p, "a")
 
 	for rev := uint64(2); rev < 6; rev++ {
 		f.setAgents(agentInfo{Name: "a", PaneID: "%1", AgentStatus: "idle", Revision: rev})
@@ -279,9 +283,7 @@ func TestActivityRemovedAgentReturnsZero(t *testing.T) {
 	f, sock := newFakeHerdrServer(t)
 	f.setAgents(agentInfo{Name: "a", PaneID: "%1", AgentStatus: "idle", Revision: 1})
 	p := activityTestProvider(t, sock)
-	if got := lastActivity(t, p, "a"); got.IsZero() {
-		t.Fatal("seed must observe the agent")
-	}
+	confirmedActivity(t, p, "a") // seed must observe the agent
 
 	f.setAgents() // agent gone
 	waitActivity(t, p, "a", 2*time.Second, func(got time.Time) bool {
@@ -391,5 +393,33 @@ func TestActivityIgnoresUnnamedPanes(t *testing.T) {
 	}
 	if _, ok := p.act.entries["alpha"]; !ok {
 		t.Errorf("activity entries = %v; want alpha", p.act.entries)
+	}
+}
+
+// A fresh process's first observation of a session herdr reports at rest is
+// no evidence of activity, so it must read as unknown (zero), not now: a
+// short-lived CLI's tracker is always cold, and stamping now made every
+// wait-idle nudge pre-check read the session busy and queue (#9041). The next
+// poll that confirms the session backfills the first-observation stamp, so a
+// long-lived controller's idle clock still starts at first observation.
+func TestActivityFirstObservationAtRestIsUnknown(t *testing.T) {
+	for _, status := range []string{"idle", "done", "blocked", "unknown"} {
+		t.Run(status, func(t *testing.T) {
+			f, sock := newFakeHerdrServer(t)
+			f.setAgents(agentInfo{Name: "a", PaneID: "%1", AgentStatus: status, Revision: 1})
+			p := activityTestProvider(t, sock)
+			// Hold the next poll off so the cold read sees only the seed.
+			activityPollInterval = 200 * time.Millisecond
+			activityEventDebounce = 200 * time.Millisecond
+
+			before := time.Now()
+			if got := lastActivity(t, p, "a"); !got.IsZero() {
+				t.Fatalf("first observation of a %s session = %v; want zero (unknown), not a fresh stamp", status, got)
+			}
+			got := waitActivity(t, p, "a", 2*time.Second, func(got time.Time) bool { return !got.IsZero() })
+			if got.Before(before) || time.Since(got) < 150*time.Millisecond {
+				t.Fatalf("confirmed stamp %v must be the first observation (taken after %v), not the confirming poll", got, before)
+			}
+		})
 	}
 }
