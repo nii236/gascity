@@ -70,6 +70,7 @@ var optionalInterfaces = map[string]reflect.Type{
 	"ProgramStatusProvider":           reflect.TypeFor[runtime.ProgramStatusProvider](),
 	"ProgramStatusShadowProvider":     reflect.TypeFor[runtime.ProgramStatusShadowProvider](),
 	"RelaunchProvider":                reflect.TypeFor[runtime.RelaunchProvider](),
+	"ReportedIdleBoundaryProvider":    reflect.TypeFor[runtime.ReportedIdleBoundaryProvider](),
 	"Router":                          reflect.TypeFor[runtime.Router](),
 	"ServerDeathConfirmer":            reflect.TypeFor[runtime.ServerDeathConfirmer](),
 	"ServerLifecycleProvider":         reflect.TypeFor[runtime.ServerLifecycleProvider](),

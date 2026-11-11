@@ -1428,6 +1428,18 @@ func (m *Manager) idleBoundaryOutOfReach(b beads.Bead, sessName string) bool {
 	return runtime.ShadowIdleBoundaryNow(m.sp, sessName, b.ID, providerKind(b)).OutOfReach()
 }
 
+// nudgeAtReportedIdleBoundary is the wait-idle nudge for a provider whose
+// TUI the screen-scan wait is not calibrated to (it is Claude's alone): it
+// types the reminder only when the runtime reads the program's own report at
+// its input boundary (runtime.ReportedIdleBoundaryNow), and otherwise reports
+// it undelivered for its caller to queue.
+func (m *Manager) nudgeAtReportedIdleBoundary(ctx context.Context, sessName, source, message string) bool {
+	if runtime.ReportedIdleBoundaryNow(m.sp, sessName) != runtime.IdleBoundaryAt {
+		return false
+	}
+	return m.nudgeSession(ctx, sessName, formatWaitIdleReminder(normalizeWaitIdleNudgeSource(source), message), true) == nil
+}
+
 func (m *Manager) tryWaitIdleNudgeLocked(ctx context.Context, by Actor, id string, b beads.Bead, source, sessName, message, resumeCommand string, hints runtime.Config) (bool, error) {
 	if err := m.ensureDeliverable(ctx, by, id, b, sessName, resumeCommand, hints); errors.Is(err, ErrAgentDead) {
 		return false, nil // not delivered: the caller queues it for the healed agent
@@ -1441,7 +1453,7 @@ func (m *Manager) tryWaitIdleNudgeLocked(ctx context.Context, by Actor, id strin
 		return true, nil
 	}
 	if providerKind(b) != "claude" {
-		return false, nil
+		return m.nudgeAtReportedIdleBoundary(ctx, sessName, source, message), nil
 	}
 	waiter, ok := m.sp.(runtime.IdleWaitProvider)
 	if !ok {
@@ -1470,7 +1482,7 @@ func (m *Manager) tryWaitIdleNudgeLiveOnlyLocked(ctx context.Context, b beads.Be
 		return true, nil
 	}
 	if providerKind(b) != "claude" {
-		return false, nil
+		return m.nudgeAtReportedIdleBoundary(ctx, sessName, source, message), nil
 	}
 	waiter, ok := m.sp.(runtime.IdleWaitProvider)
 	if !ok {

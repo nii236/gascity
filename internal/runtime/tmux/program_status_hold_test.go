@@ -285,3 +285,44 @@ func TestHealConvergesTheHoldDeclarationOfALiveCapture(t *testing.T) {
 		t.Fatalf("a guarded declaration landed on a pane re-armed under another nonce: hold %q", agent.hold)
 	}
 }
+
+// Kills a reported idle boundary read from the state cache, one that needs
+// the mid-turn hold's declaration, and one read under a switch that is not
+// on: the pane's own record decides with one fresh read, its hold option
+// unset, and off or shadow read nothing.
+func TestReportedIdleBoundaryReadsThePaneFresh(t *testing.T) {
+	idle := psRecord(t, readNonce, runtime.ProgramIdle, liveSince)
+	working := psRecord(t, readNonce, runtime.ProgramWorking, liveSince)
+	freshRow := func(record string) func(int) string {
+		return func(int) string {
+			return strings.Join([]string{"0", "agent", "%5", "1", readNonce, record, "", "", "0", runtimeInventoryEnd}, "\t")
+		}
+	}
+	for _, c := range []struct {
+		name          string
+		cached, fresh string
+		want          runtime.IdleBoundary
+	}{
+		{"cache working, fresh idle", working, idle, runtime.IdleBoundaryAt},
+		{"cache idle, fresh working", idle, working, runtime.IdleBoundaryBusy},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			table := tapTable(readNonce)
+			p, fe := readProvider(runtime.ProgramStatusOn, fetchRows(armedPane(c.cached)), &table)
+			ex := &holdExecutor{inner: fe, row: freshRow(c.fresh)}
+			p.tm.exec = ex
+			if got := runtime.ReportedIdleBoundaryNow(p, "s"); got != c.want || ex.holdReads() != 1 {
+				t.Fatalf("ReportedIdleBoundaryNow = %s after %d fresh reads, want %s after one", got, ex.holdReads(), c.want)
+			}
+		})
+	}
+	for _, mode := range []runtime.ProgramStatusMode{runtime.ProgramStatusOff, runtime.ProgramStatusShadow} {
+		table := tapTable(readNonce)
+		p, fe := readProvider(mode, fetchRows(armedPane(idle)), &table)
+		ex := &holdExecutor{inner: fe, row: freshRow(idle)}
+		p.tm.exec = ex
+		if got := p.ReportedIdleBoundary("s"); got != runtime.IdleBoundaryUnknown || ex.holdReads() != 0 {
+			t.Errorf("switch %s: %s after %d fresh reads, want unknown after none", mode, got, ex.holdReads())
+		}
+	}
+}

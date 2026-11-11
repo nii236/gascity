@@ -93,3 +93,33 @@ func interactionPending(p Provider, name string) bool {
 	pending, err := ip.Pending(name)
 	return err == nil && pending != nil
 }
+
+// ReportedIdleBoundaryProvider is an optional extension for runtimes that
+// read whether a session is at its input boundary from the agent program's
+// own report of its state (an OSC 7501 program-status record, a terminal
+// multiplexer's agent status), not from a screen scan calibrated to one
+// provider family's TUI. The reading is one fresh look, never a cached
+// snapshot: [IdleBoundaryAt] only when the report says the program is at its
+// input boundary, [IdleBoundaryBusy] for a running turn,
+// [IdleBoundaryPending] for a dialog that owns the input, and
+// [IdleBoundaryUnknown] whenever the runtime has no report it may decide
+// with. Composites do not implement it; it is read on the routed leaf
+// ([ReportedIdleBoundaryNow]).
+type ReportedIdleBoundaryProvider interface {
+	ReportedIdleBoundary(name string) IdleBoundary
+}
+
+// ReportedIdleBoundaryNow reads session name's reported idle boundary on the
+// leaf serving it ([ReportedIdleBoundaryProvider]). A leaf without the
+// capability reads unknown.
+func ReportedIdleBoundaryNow(p Provider, name string) IdleBoundary {
+	if p == nil || name == "" {
+		return IdleBoundaryUnknown
+	}
+	leaf, _, _ := ResolveBackend(p, name)
+	r, ok := leaf.(ReportedIdleBoundaryProvider)
+	if !ok {
+		return IdleBoundaryUnknown
+	}
+	return r.ReportedIdleBoundary(name)
+}

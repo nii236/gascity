@@ -631,7 +631,21 @@ func (h *RuntimeHandle) nudgeWaitIdle(ctx context.Context, req NudgeRequest) (Nu
 	// property of the runtime rather than a transient miss. Reporting it as a
 	// bare Delivered:false is how `gc session nudge` came to print an
 	// unqualified success line for a delivery path that is a no-op end to end.
+	// The screen-scan wait below is calibrated to Claude's TUI alone. Any
+	// other provider gets live delivery only where the runtime reads the
+	// program's own report of its state (runtime.ReportedIdleBoundaryNow):
+	// typed at once at a reported input boundary, queued on a reported
+	// running turn or dialog, and unsupported where nothing is reported.
 	if h.providerName != "claude" {
+		switch runtime.ReportedIdleBoundaryNow(h.provider, h.sessionName) {
+		case runtime.IdleBoundaryAt:
+			if err := h.nudgeNow(formatRuntimeWaitIdleReminder(req.Source, req.Text)); err != nil {
+				return NudgeResult{}, runtimeInteractionError(err)
+			}
+			return NudgeResult{Delivered: true}, nil
+		case runtime.IdleBoundaryBusy, runtime.IdleBoundaryPending:
+			return NudgeResult{Delivered: false, Undelivered: NudgeUndeliveredNoIdleBoundary}, nil
+		}
 		return NudgeResult{Delivered: false, Undelivered: NudgeUndeliveredProviderUnsupported}, nil
 	}
 	waiter, ok := h.provider.(runtime.IdleWaitProvider)

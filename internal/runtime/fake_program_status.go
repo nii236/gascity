@@ -172,6 +172,22 @@ func (f FullFake) ProgramStatusHoldRead(name string) (ProgramHoldReading, bool) 
 	return f.programHoldReadLocked(name)
 }
 
+// ReportedIdleBoundary implements [ReportedIdleBoundaryProvider]: name's
+// agent-pane row judged fresh with the session's configured activity
+// ([ProgramIdleBoundary]), recorded as a call of its own. It reads unknown
+// unless the row's switch is on and the read would succeed; it needs no hold
+// declaration.
+func (f FullFake) ReportedIdleBoundary(name string) IdleBoundary {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, Call{Method: "ReportedIdleBoundary", Name: name})
+	row := f.ProgramPanes[name]
+	if row.Mode != ProgramStatusOn || f.programReadableLocked(name) != nil || f.ProgramStatusErrors[name] != nil {
+		return IdleBoundaryUnknown
+	}
+	return ProgramIdleBoundary(ProgramHoldReading{Status: JudgeProgramStatus(row), Activity: f.Activity[name]}, time.Now())
+}
+
 // programHoldReadLocked is ProgramStatusHoldRead's reading, read under
 // f.mu.
 func (f *Fake) programHoldReadLocked(name string) (ProgramHoldReading, bool) {

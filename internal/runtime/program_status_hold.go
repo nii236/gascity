@@ -72,6 +72,27 @@ func ProgramTypingHolds(r ProgramHoldReading, now time.Time) bool {
 	return r.Status.Decides() && ProgramTurnHoldVerdict(r.Status, r.Activity, laterTime(now, time.Now())) == ProgramVerdictHold
 }
 
+// ProgramIdleBoundary is the idle boundary a fresh reading r reports: the
+// record's idle verdict ([ProgramIdleVerdict]) judged with the pane's
+// activity at the later of now and the clock read here, as
+// [ProgramTypingHolds] judges it. A reading that does not decide (not valid,
+// or not taken under the switch on) reads unknown.
+func ProgramIdleBoundary(r ProgramHoldReading, now time.Time) IdleBoundary {
+	if !r.Status.Decides() {
+		return IdleBoundaryUnknown
+	}
+	switch ProgramIdleVerdict(r.Status, r.Activity, laterTime(now, time.Now())) {
+	case ProgramVerdictIdle:
+		return IdleBoundaryAt
+	case ProgramVerdictBusy:
+		return IdleBoundaryBusy
+	case ProgramVerdictPending:
+		return IdleBoundaryPending
+	default:
+		return IdleBoundaryUnknown
+	}
+}
+
 // ProgramRecordTypingHold reads session name's record fresh on the leaf
 // serving it ([ProgramStatusHoldProvider]) and reports whether it holds
 // typing now ([ProgramTypingHolds]), with the reading it judged. A leaf
