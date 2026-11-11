@@ -349,7 +349,7 @@ upstream env. Set `provider` and run their normal `login` once on the box; no
 ```toml
 provider = "pi"          # Pi Coding Agent     — has a model option (ollama-cloud-gpt-oss-20b)
 # provider = "auggie"    # Augment Auggie CLI
-# provider = "omp"       # Oh My Pi
+# provider = "omp"       # Oh My Pi            — model + effort options (--model, --thinking)
 # provider = "antigravity"   # Antigravity (agy) — effort + plan/accept-edits modes
 ```
 

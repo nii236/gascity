@@ -930,6 +930,14 @@ var builtinProviderSpecs = map[string]BuiltinProviderSpec{
 		InstructionsFile: "AGENTS.md",
 		ResumeFlag:       "--resume",
 		ResumeStyle:      "flag",
+		OptionsSchema: []BuiltinProviderOption{
+			// omp resolves the id itself (fuzzy, or "provider/id"), so no
+			// curated choices: the open template passes any id through.
+			modelOption(),
+			// omp spells effort --thinking; it also accepts off|minimal|auto,
+			// which stay reachable through the open template.
+			effortOption([]string{"--thinking", optionValuePlaceholder}, effortTiers...),
+		},
 
 		// omp 18.8.7+ reports OSC 7501 on any TTY without a probe while its
 		// terminal.programStatus setting is on (the default). Verified with

@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -563,5 +564,46 @@ func TestCodexPermissionModesUseApprovalPoliciesStockCodexAccepts(t *testing.T) 
 	const want = "--ask-for-approval on-request --sandbox read-only"
 	if got := codex.PermissionModes["suggest"]; got != want {
 		t.Errorf("PermissionModes[suggest] = %q, want %q", got, want)
+	}
+}
+
+// omp --help (v18.18.6): --model=<value> takes a fuzzy or provider/id model,
+// --thinking=<value> takes off|minimal|low|medium|high|xhigh|max|auto. Both
+// options must be open and unset by default, so an omp agent with no pin
+// launches exactly as before.
+func TestBuiltinOmpModelAndEffortOptions(t *testing.T) {
+	omp, ok := BuiltinProviders()["omp"]
+	if !ok {
+		t.Fatal("BuiltinProviders() missing omp")
+	}
+	if len(omp.OptionDefaults) != 0 {
+		t.Errorf("OptionDefaults = %v, want none (an unset option must add no args)", omp.OptionDefaults)
+	}
+	byKey := make(map[string]BuiltinProviderOption, len(omp.OptionsSchema))
+	for _, opt := range omp.OptionsSchema {
+		byKey[opt.Key] = opt
+	}
+	for key, wantTemplate := range map[string][]string{
+		"model":  {"--model", optionValuePlaceholder},
+		"effort": {"--thinking", optionValuePlaceholder},
+	} {
+		opt, ok := byKey[key]
+		if !ok {
+			t.Fatalf("omp missing %q option", key)
+		}
+		if opt.Default != "" {
+			t.Errorf("%s Default = %q, want empty", key, opt.Default)
+		}
+		if !slices.Equal(opt.FlagTemplate, wantTemplate) {
+			t.Errorf("%s FlagTemplate = %v, want %v", key, opt.FlagTemplate, wantTemplate)
+		}
+		if len(opt.Choices) == 0 || opt.Choices[0].Value != "" || len(opt.Choices[0].FlagArgs) != 0 {
+			t.Errorf("%s choices must lead with the empty no-flag sentinel, got %v", key, opt.Choices)
+		}
+	}
+	for _, tier := range []string{"low", "medium", "high", "xhigh", "max"} {
+		if got, want := mustChoiceFlagArgs(t, omp, "effort", tier), []string{"--thinking", tier}; !slices.Equal(got, want) {
+			t.Errorf("effort %s FlagArgs = %v, want %v", tier, got, want)
+		}
 	}
 }
