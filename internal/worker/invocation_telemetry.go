@@ -65,6 +65,8 @@ func defaultPricingRegistry() *pricing.Registry {
 //     would otherwise be attributed each other's export. The whole
 //     export is parsed (it is one JSON document, not an append-only log) and
 //     the provider-reported cost is preferred over the price table.
+//   - pi (and omp): Manager.TranscriptPath, as for claude, + the pi JSONL
+//     extractor, which also prefers a positive provider-reported cost.
 //   - codex: identity-first. When the session bead carries a session_key
 //     (captured from the codex hook; codex rollout filenames end in the
 //     same uuid), the rollout is resolved by that suffix via
@@ -226,7 +228,7 @@ func (h *SessionHandle) recordInvocationTelemetry(ctx context.Context) {
 }
 
 // invocationCost prices one invocation. A cost the provider's own transcript
-// recorded (OpenCode) wins over the price table: it reflects the upstream the
+// recorded (OpenCode, pi) wins over the price table: it reflects the upstream the
 // session actually routed through, which a static (family, model) table cannot
 // know. Without one the registry decides, and a miss is reported unpriced so
 // the fact keeps its tokens and is flagged rather than zero-filled.
@@ -335,12 +337,18 @@ var invocationUsageSpecs = map[string]invocationUsageSpec{
 		discover: discoverOpenCodeInvocationTranscript,
 		extract:  SessionLogAdapter.OpenCodeTailUsage,
 	},
+	// pi covers omp (Oh My Pi), which writes the same transcript format.
+	"pi": {
+		discover: discoverInvocationTranscriptViaManager,
+		extract:  SessionLogAdapter.PiTailUsage,
+	},
 }
 
 // invocationUsageFamily resolves a provider string to its registered
 // invocation-usage family key: claude-family providers (including
-// claude-eco) match by name, codex resolves through sessionlog.ProviderFamily,
-// and everything else returns "" (unregistered).
+// claude-eco) match by name, codex, opencode and pi (which covers omp)
+// resolve through sessionlog.ProviderFamily, and everything else returns ""
+// (unregistered).
 func invocationUsageFamily(provider string) string {
 	if strings.Contains(strings.ToLower(provider), "claude") {
 		return "claude"
@@ -350,6 +358,8 @@ func invocationUsageFamily(provider string) string {
 		return "codex"
 	case "opencode":
 		return "opencode"
+	case "pi":
+		return "pi"
 	}
 	return ""
 }

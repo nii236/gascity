@@ -280,6 +280,16 @@ func Phase1Profiles() []Profile {
 				RecallResponseContains: "Pi phase 1 validates the tmux CLI transcript contract.",
 				ResetResponseContains:  "I cannot repeat the earlier Pi summary because this session started fresh.",
 			},
+			Usage: UsageExpectation{
+				Supported:    true,
+				Invocations:  1,
+				InputTokens:  1,
+				OutputTokens: 1,
+				Model:        "gpt-oss:20b",
+				// pi records a per-call cost from its own model table; the
+				// default price table carries no rate for the family.
+				DefaultCostPriced: false,
+			},
 			// pi reports only after a 7501 reply, which tmux never sends; its
 			// declared PI_PROGRAM_STATUS=1 forces reports and skips the probe,
 			// so capture needs no relay. Recorded under gc's tmux with that env
