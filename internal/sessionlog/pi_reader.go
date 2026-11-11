@@ -153,13 +153,60 @@ func piSessionDirName(workDir string) string {
 	return "--" + replacer.Replace(trimmed) + "--"
 }
 
+// ompSessionDirName mirrors omp's (oh-my-pi) session-directory encoding
+// (packages/coding-agent/src/session/session-paths.ts): on real paths, a cwd
+// under the temp dir becomes "-tmp-<rel>", one under home becomes "-<rel>"
+// (home itself is "-"), with "/", "\\" and ":" replaced by "-"; any other cwd
+// uses pi's "--<abs>--" form.
+func ompSessionDirName(workDir, home, tmp string) string {
+	cwd := ompRealPath(workDir)
+	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-")
+	if rel, ok := ompRelative(tmp, cwd); ok {
+		if rel == "" {
+			return "-tmp"
+		}
+		return "-tmp-" + replacer.Replace(rel)
+	}
+	if rel, ok := ompRelative(home, cwd); ok {
+		return "-" + replacer.Replace(rel)
+	}
+	return piSessionDirName(cwd)
+}
+
+func ompRealPath(path string) string {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+	return filepath.Clean(path)
+}
+
+// ompRelative reports target relative to base ("" for base itself), as omp's
+// containment check does, or false when target is not under base.
+func ompRelative(base, target string) (string, bool) {
+	if base == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(ompRealPath(base), target)
+	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return "", false
+	}
+	if rel == "." {
+		return "", true
+	}
+	return rel, true
+}
+
 // piLegacyWalkExcludedRoots lists roots the legacy full-tree walk must never
 // descend into. The generic transcript search paths (the Claude projects tree
 // by default) are merged into the pi roots by mergePiSearchPaths, and that tree
 // can hold tens of thousands of .jsonl files that can never be pi transcripts:
 // walking it cost one readdir+lstat per file, per pi session row, per
-// /sessions request (gascity sys-by2243.75). Overridable for tests.
-var piLegacyWalkExcludedRoots = DefaultSearchPaths
+// /sessions request (gascity sys-by2243.75). The omp root is excluded too:
+// omp always writes under its encoded cwd directory, and its root holds every
+// omp transcript on the machine. Overridable for tests.
+var piLegacyWalkExcludedRoots = func() []string {
+	return append(DefaultSearchPaths(), defaultOMPSearchPaths()...)
+}
 
 func findPiSessionCandidates(searchPaths []string, workDir string) []piSessionCandidate {
 	workDir = cleanPiWorkDir(workDir)
@@ -168,12 +215,20 @@ func findPiSessionCandidates(searchPaths []string, workDir string) []piSessionCa
 	}
 
 	roots := mergePiSearchPaths(searchPaths)
-	dirName := piSessionDirName(workDir)
+	// The pi family covers pi and omp, which encode the cwd directory
+	// differently; a root may hold either layout.
+	home, _ := os.UserHomeDir()
+	dirNames := []string{piSessionDirName(workDir)}
+	if omp := ompSessionDirName(workDir, home, os.TempDir()); omp != dirNames[0] {
+		dirNames = append(dirNames, omp)
+	}
 	// The encoded name is a single path component by construction (every
 	// separator is replaced); the IsLocal guard keeps the join provably
 	// containment-safe for CodeQL's path-injection query.
-	if !filepath.IsLocal(dirName) {
-		return nil
+	for _, dirName := range dirNames {
+		if !filepath.IsLocal(dirName) {
+			return nil
+		}
 	}
 	// The fallback is decided per root: a root holding the cwd-encoded
 	// directory is read from that directory alone, and any other root uses the
@@ -186,12 +241,15 @@ func findPiSessionCandidates(searchPaths []string, workDir string) []piSessionCa
 	}
 	var candidates []piSessionCandidate
 	for _, root := range roots {
-		dir := filepath.Join(root, dirName)
-		if entries, err := os.ReadDir(dir); err == nil {
-			candidates = append(candidates, piSessionCandidatesFromDir(dir, entries, workDir)...)
-			continue
+		found := false
+		for _, dirName := range dirNames {
+			dir := filepath.Join(root, dirName)
+			if entries, err := os.ReadDir(dir); err == nil {
+				candidates = append(candidates, piSessionCandidatesFromDir(dir, entries, workDir)...)
+				found = true
+			}
 		}
-		if excluded[filepath.Clean(root)] {
+		if found || excluded[filepath.Clean(root)] {
 			continue
 		}
 		candidates = append(candidates, findPiSessionCandidatesIn(root, workDir)...)
@@ -875,6 +933,16 @@ func piSessionHeader(path string) (sessionID, cwd string, read bool) {
 	if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
 		return "", "", true
 	}
+	// omp writes a title entry ahead of the session header.
+	if header.Type == "title" {
+		if !scanner.Scan() {
+			return "", "", scanner.Err() == nil
+		}
+		header.Type = ""
+		if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
+			return "", "", true
+		}
+	}
 	if header.Type != "session" {
 		return "", "", true
 	}
@@ -897,13 +965,21 @@ func piSessionID(path string) string {
 	return base
 }
 
-// DefaultPiSearchPaths returns the default Pi session directory.
+// DefaultPiSearchPaths returns the default Pi and omp session directories.
 func DefaultPiSearchPaths() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
-	return []string{filepath.Join(home, ".pi", "agent", "sessions")}
+	return append([]string{filepath.Join(home, ".pi", "agent", "sessions")}, defaultOMPSearchPaths()...)
+}
+
+func defaultOMPSearchPaths() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{filepath.Join(home, ".omp", "agent", "sessions")}
 }
 
 type piEntry struct {

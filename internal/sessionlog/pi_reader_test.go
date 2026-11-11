@@ -715,6 +715,54 @@ func TestPiSessionDirNameMatchesPiEncoding(t *testing.T) {
 	}
 }
 
+func TestOMPSessionDirNameMatchesOMPEncoding(t *testing.T) {
+	home := "/Users/jonesy"
+	tmp := "/var/folders/xy/T"
+	for _, tc := range []struct{ in, want string }{
+		{"/Users/jonesy", "-"},
+		{"/Users/jonesy/gascity/my-city", "-gascity-my-city"},
+		{"/Users/jonesy/gascity/my-city/.gc/agents/bd.dog-1", "-gascity-my-city-.gc-agents-bd.dog-1"},
+		{"/var/folders/xy/T", "-tmp"},
+		{"/var/folders/xy/T/work/repo", "-tmp-work-repo"},
+		{"/private/tmp", "--private-tmp--"},
+		{"/a/b:c", "--a-b-c--"},
+	} {
+		if got := ompSessionDirName(tc.in, home, tmp); got != tc.want {
+			t.Errorf("ompSessionDirName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestFindPiSessionFileByIDFindsOMPTranscriptUnderDefaultRoot(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	t.Setenv("HOME", home)
+	t.Setenv("TMPDIR", filepath.Join(base, "tmp"))
+	workDir := filepath.Join(home, "gascity", "my-city")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	dir := filepath.Join(home, ".omp", "agent", "sessions", "-gascity-my-city")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir omp dir: %v", err)
+	}
+	target := filepath.Join(dir, "2026-11-10T01-23-17-787Z_ses_omp.jsonl")
+	// omp writes a title entry before the session header.
+	body := `{"type":"title","v":1,"title":"","updatedAt":"2026-11-10T01:23:17.787Z"}
+{"type":"session","version":3,"id":"ses_omp","timestamp":"2026-11-10T01:23:17.787Z","cwd":"` + filepath.ToSlash(workDir) + `"}
+`
+	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+		t.Fatalf("write omp transcript: %v", err)
+	}
+
+	if got := FindPiSessionFileByID(nil, workDir, "ses_omp"); got != target {
+		t.Fatalf("FindPiSessionFileByID(ses_omp) = %q, want %q", got, target)
+	}
+	if got := FindSessionFileForProvider(nil, "omp", workDir); got != target {
+		t.Fatalf("FindSessionFileForProvider(omp) = %q, want %q", got, target)
+	}
+}
+
 func TestFindPiSessionFileByIDReadsEncodedCwdDirWithoutWalking(t *testing.T) {
 	root := t.TempDir()
 	workDir := filepath.Join(t.TempDir(), "project")
