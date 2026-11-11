@@ -47,7 +47,12 @@ import (
 // a provider change is rare, and the tracker is one goroutine plus one
 // subscription). Stamps are process-local: after a controller restart the
 // idle clocks restart from first observation, so idle-driven actions fire at
-// most one timeout period late — never early.
+// most one timeout period late — never early. A first observation of a
+// session at rest is no evidence of activity, so it reads as unknown (zero)
+// until a later poll confirms the session; only then does the
+// first-observation stamp start its idle clock. Otherwise every short-lived
+// CLI, whose tracker is always cold, would read an idle session as just
+// active (#9041).
 
 // Poll/debounce knobs. Vars so tests can shrink them; production values:
 //   - activityPollInterval: reconcile cadence when no events arrive. 30s
@@ -82,6 +87,10 @@ type activityEntry struct {
 	status   string
 	revision uint64
 	stamp    time.Time // last observed activity
+	// provisional marks a stamp that is only this process's first sight of
+	// the session: no evidence of activity, so it reads as unknown until a
+	// later poll confirms the session (#9041).
+	provisional bool
 }
 
 // activityTracker owns the per-session activity map. All stamping decisions
@@ -167,8 +176,9 @@ func (a *activityTracker) stop() {
 }
 
 // lastActivity answers GetLastActivity from tracked state: unknown session →
-// zero; working → now (continuously active); anything else → the frozen
-// stamp of its last observed change.
+// zero; working → now (continuously active); first observed at rest and not
+// yet confirmed by a later poll → zero; anything else → the frozen stamp of
+// its last observed change.
 func (a *activityTracker) lastActivity(name string) time.Time {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -178,6 +188,9 @@ func (a *activityTracker) lastActivity(name string) time.Time {
 	}
 	if e.status == agentStatusWorking {
 		return a.now()
+	}
+	if e.provisional {
+		return time.Time{}
 	}
 	return e.stamp
 }
@@ -254,6 +267,7 @@ func (a *activityTracker) poll(ctx context.Context, c *client) {
 		switch {
 		case !seen:
 			e.stamp = now
+			e.provisional = true
 		case status != prev.status:
 			e.stamp = now
 		case status == agentStatusUnknown && ag.Revision != prev.revision:
