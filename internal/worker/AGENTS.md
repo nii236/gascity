@@ -153,6 +153,18 @@ is. A failed turn carries the error its transcript recorded
 the source classed it a rate limit, and the text, for people only. Claude and
 Codex transcripts record it; a family that records none leaves it zero.
 
+## Wait-idle delivery
+
+The screen-scan idle wait (`runtime.IdleWaitProvider` with the
+`IdleBoundaryNow` pre-read) is calibrated to Claude's TUI alone. Every other
+provider gets live wait-idle delivery only where the runtime reads the agent
+program's own report of its state (`runtime.ReportedIdleBoundaryNow`: the
+OSC 7501 record under `program_status = "on"` on tmux, herdr's
+`agent_status`): typed at once at a reported input boundary, queued
+(`no_idle_boundary`) on a reported running turn or dialog, and
+`live_delivery_unsupported` with no report. `RuntimeHandle.nudgeWaitIdle` and
+`session.Manager`'s wait-idle nudges follow the same rule.
+
 ## Keyed deliveries
 
 A request's `DeliveryKey` (`NudgeRequest`, `MessageRequest`) reaches only a

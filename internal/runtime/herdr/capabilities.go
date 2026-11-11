@@ -27,7 +27,39 @@ var (
 	// SessionEventProvider is implemented in events.go over the socket API's
 	// events.subscribe stream (see #4217 herdr-first-class).
 	_ runtime.SessionEventProvider = (*Provider)(nil)
+	// ReportedIdleBoundaryProvider reads the boundary from herdr's own
+	// agent_status, which herdr derives per agent kind (see
+	// idleBoundaryFromAgent).
+	_ runtime.ReportedIdleBoundaryProvider = (*Provider)(nil)
 )
+
+// ReportedIdleBoundary implements [runtime.ReportedIdleBoundaryProvider]
+// with one `agent get` of the session's registered agent.
+func (p *Provider) ReportedIdleBoundary(name string) runtime.IdleBoundary {
+	info, present, err := p.c.getAgent(context.Background(), herdrAgentName(name))
+	return idleBoundaryFromAgent(info, present, err)
+}
+
+// idleBoundaryFromAgent folds a herdr `agent get` result into an idle
+// boundary: idle, or done (a Claude pane that finished a turn), is at the
+// boundary; working is busy; blocked (a dialog) is pending. A failed query,
+// an absent agent (a raw shell pane registers none) and any status herdr
+// could not classify read unknown.
+func idleBoundaryFromAgent(info agentInfo, present bool, err error) runtime.IdleBoundary {
+	if err != nil || !present {
+		return runtime.IdleBoundaryUnknown
+	}
+	switch normalizeAgentState(info.AgentStatus) {
+	case agentStateIdle, "done":
+		return runtime.IdleBoundaryAt
+	case "working":
+		return runtime.IdleBoundaryBusy
+	case agentStateBlocked:
+		return runtime.IdleBoundaryPending
+	default:
+		return runtime.IdleBoundaryUnknown
+	}
+}
 
 // idleWaitOutcome is the legible verdict of one `agent wait --until idle`
 // probe. Start's startup delivery proceeds either way, but records WHY a

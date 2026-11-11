@@ -75,6 +75,7 @@ type ProfileBackend interface {
 	ProgramStatusProvider
 	ProgramStatusShadowProvider
 	RelaunchProvider
+	ReportedIdleBoundaryProvider
 	ServerDeathConfirmer
 	ServerLifecycleProvider
 	SessionEventProvider
@@ -128,6 +129,7 @@ func NewFakeProfile(p Profile, b ProfileBackend) Provider {
 			ProgramStatusProvider:         b,
 			ProgramStatusShadowProvider:   b,
 			RelaunchProvider:              b,
+			ReportedIdleBoundaryProvider:  b,
 			ServerDeathConfirmer:          b,
 			ServerLifecycleProvider:       b,
 			SessionObjectKiller:           b,
@@ -144,7 +146,7 @@ func NewFakeProfile(p Profile, b ProfileBackend) Provider {
 	case ProfileSubprocess:
 		return subprocessProfile{core, b, b, b, b, freshTrait{}, sidecarTrait{}, timed, localTranscriptTrait{}}
 	case ProfileHerdr:
-		return herdrProfile{core, b, b, b, b, b, localTranscriptTrait{}}
+		return herdrProfile{core, b, b, b, b, b, b, localTranscriptTrait{}}
 	case ProfileK8s:
 		return k8sProfile{core, b, b, timed, sharedListingTrait{}}
 	case ProfileExec, ProfileExecV2:
@@ -266,6 +268,7 @@ type (
 		ProgramStatusProvider
 		ProgramStatusShadowProvider
 		RelaunchProvider
+		ReportedIdleBoundaryProvider
 		ServerDeathConfirmer
 		ServerLifecycleProvider
 		SessionObjectKiller
@@ -312,6 +315,7 @@ type (
 		IdleWaitProvider
 		ImmediateNudgeProvider
 		LivenessObserver
+		ReportedIdleBoundaryProvider
 		ServerLifecycleProvider
 		SessionEventProvider
 		localTranscriptTrait

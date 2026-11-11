@@ -69,3 +69,29 @@ func TestListRunningIsNotAttested(t *testing.T) {
 		}
 	}
 }
+
+// Kills a reported idle boundary that reads anything but herdr's own
+// agent_status: idle and done are at the boundary, working is busy, blocked
+// is pending, and a failed query, an absent agent or a status herdr could
+// not classify read unknown, so the caller never types on a guess.
+func TestIdleBoundaryFromAgent(t *testing.T) {
+	for _, c := range []struct {
+		status  string
+		present bool
+		err     error
+		want    runtime.IdleBoundary
+	}{
+		{status: "idle", present: true, want: runtime.IdleBoundaryAt},
+		{status: " Done ", present: true, want: runtime.IdleBoundaryAt},
+		{status: "working", present: true, want: runtime.IdleBoundaryBusy},
+		{status: "blocked", present: true, want: runtime.IdleBoundaryPending},
+		{status: "unknown", present: true, want: runtime.IdleBoundaryUnknown},
+		{status: "", present: true, want: runtime.IdleBoundaryUnknown},
+		{status: "idle", present: false, want: runtime.IdleBoundaryUnknown},
+		{status: "idle", present: true, err: errors.New("herdr transport failure"), want: runtime.IdleBoundaryUnknown},
+	} {
+		if got := idleBoundaryFromAgent(agentInfo{AgentStatus: c.status}, c.present, c.err); got != c.want {
+			t.Errorf("idleBoundaryFromAgent(%q, present=%t, err=%v) = %s, want %s", c.status, c.present, c.err, got, c.want)
+		}
+	}
+}

@@ -239,3 +239,65 @@ func TestShadowCompareFreshReadsPastTheCache(t *testing.T) {
 		t.Fatal("the comparison read the cached reading")
 	}
 }
+
+// Kills a reported idle boundary that reads anything but a deciding record:
+// a root at an input boundary is at it, a live working root busy, a live
+// blocked root pending, and a shadow reading, an invalid one, or a hold
+// past its bound reads unknown.
+func TestProgramIdleBoundary(t *testing.T) {
+	now := time.Now()
+	reading := func(mode runtime.ProgramStatusMode, st runtime.ProgramState, since time.Time) runtime.ProgramHoldReading {
+		s := valid(st, 2, 1)
+		s.Mode, s.Since = mode, since
+		return runtime.ProgramHoldReading{Status: s}
+	}
+	recent, expired := now.Add(-time.Second), now.Add(-runtime.ProgramStatusHoldLimit-time.Second)
+	for _, c := range []struct {
+		name string
+		r    runtime.ProgramHoldReading
+		want runtime.IdleBoundary
+	}{
+		{"idle", reading(runtime.ProgramStatusOn, runtime.ProgramIdle, recent), runtime.IdleBoundaryAt},
+		{"done", reading(runtime.ProgramStatusOn, runtime.ProgramDone, recent), runtime.IdleBoundaryAt},
+		{"error", reading(runtime.ProgramStatusOn, runtime.ProgramError, recent), runtime.IdleBoundaryAt},
+		{"working", reading(runtime.ProgramStatusOn, runtime.ProgramWorking, recent), runtime.IdleBoundaryBusy},
+		{"blocked", reading(runtime.ProgramStatusOn, runtime.ProgramBlocked, recent), runtime.IdleBoundaryPending},
+		{"working past the bound", reading(runtime.ProgramStatusOn, runtime.ProgramWorking, expired), runtime.IdleBoundaryUnknown},
+		{"shadow reading decides nothing", reading(runtime.ProgramStatusShadow, runtime.ProgramIdle, recent), runtime.IdleBoundaryUnknown},
+		{"not valid", runtime.ProgramHoldReading{Status: runtime.ProgramStatus{Mode: runtime.ProgramStatusOn, Validity: runtime.ProgramStatusSilent}}, runtime.IdleBoundaryUnknown},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := runtime.ProgramIdleBoundary(c.r, now); got != c.want {
+				t.Fatalf("ProgramIdleBoundary(%+v) = %s, want %s", c.r.Status, got, c.want)
+			}
+		})
+	}
+}
+
+// Kills a reported boundary read from the cached snapshot, one that needs
+// the mid-turn hold's declaration, one read under a switch that is not on,
+// and one that does not reach the leaf behind a composite.
+func TestReportedIdleBoundaryNowReadsTheLeafFresh(t *testing.T) {
+	now := time.Now()
+	f, ff := heldFake(t, holdRow(runtime.ProgramStatusOn, runtime.ProgramIdle, now.Add(-time.Second)))
+	f.SetProgramHold("s", false)
+	f.SetProgramCachedPane("s", holdRow(runtime.ProgramStatusOn, runtime.ProgramWorking, now.Add(-time.Second)))
+	if got := runtime.ReportedIdleBoundaryNow(auto.New(ff, runtime.NewFake()), "s"); got != runtime.IdleBoundaryAt {
+		t.Fatalf("cache working, fresh idle, behind a composite: %s, want at", got)
+	}
+	f.SetProgramPane("s", holdRow(runtime.ProgramStatusOn, runtime.ProgramWorking, now.Add(-time.Second)))
+	f.SetProgramHold("s", false)
+	if got := runtime.ReportedIdleBoundaryNow(ff, "s"); got != runtime.IdleBoundaryBusy {
+		t.Fatalf("fresh working: %s, want busy", got)
+	}
+	_, shadow := heldFake(t, holdRow(runtime.ProgramStatusShadow, runtime.ProgramIdle, now.Add(-time.Second)))
+	if got := runtime.ReportedIdleBoundaryNow(shadow, "s"); got != runtime.IdleBoundaryUnknown {
+		t.Fatalf("switch shadow: %s, want unknown", got)
+	}
+	if got := runtime.ReportedIdleBoundaryNow(runtime.NewFake(), "s"); got != runtime.IdleBoundaryUnknown {
+		t.Fatalf("a leaf without the capability: %s, want unknown", got)
+	}
+	if got := runtime.ReportedIdleBoundaryNow(nil, "s"); got != runtime.IdleBoundaryUnknown {
+		t.Fatalf("a nil provider: %s, want unknown", got)
+	}
+}

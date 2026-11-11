@@ -906,7 +906,10 @@ func TestSessionHandleNudgeWaitIdleUsesWorkerBoundary(t *testing.T) {
 	}
 }
 
-func TestSessionHandleNudgeWaitIdleReturnsUndeliveredForUnsupportedProvider(t *testing.T) {
+// A provider whose idle boundary the runtime cannot establish (no screen
+// signature gc scans for it, no reported program state) is not typed into:
+// the wait-idle nudge is reported undelivered so the caller queues it.
+func TestSessionHandleNudgeWaitIdleReturnsUndeliveredWithoutIdleSignal(t *testing.T) {
 	handle, _, sp, _ := newTestSessionHandle(t, SessionSpec{
 		Profile:  ProfileCodexTmuxCLI,
 		Template: "probe",
@@ -929,12 +932,12 @@ func TestSessionHandleNudgeWaitIdleReturnsUndeliveredForUnsupportedProvider(t *t
 		t.Fatalf("Nudge(wait_idle): %v", err)
 	}
 	if result.Delivered {
-		t.Fatal("Nudge(wait_idle) Delivered = true, want false for unsupported provider")
+		t.Fatal("Nudge(wait_idle) Delivered = true, want false without an idle signal")
 	}
 
 	for _, call := range sp.Calls[startCalls:] {
 		if call.Method == "WaitForIdle" || call.Method == "Nudge" || call.Method == "NudgeNow" {
-			t.Fatalf("calls = %#v, want no live wait-idle delivery on unsupported provider", sp.Calls[startCalls:])
+			t.Fatalf("calls = %#v, want no live wait-idle delivery without an idle signal", sp.Calls[startCalls:])
 		}
 	}
 }
@@ -2200,7 +2203,105 @@ func TestRuntimeHandleWaitIdleBusySnapshotQueuesWithoutWaiting(t *testing.T) {
 	}
 }
 
-func TestRuntimeHandleNudgeWaitIdleUnsupportedProviderReturnsUndelivered(t *testing.T) {
+// reportedBoundaryFake is a Fake whose runtime reads the agent program's own
+// reported idle boundary (runtime.ReportedIdleBoundaryProvider) as boundary.
+type reportedBoundaryFake struct {
+	*runtime.Fake
+	boundary runtime.IdleBoundary
+}
+
+func (f *reportedBoundaryFake) ReportedIdleBoundary(string) runtime.IdleBoundary { return f.boundary }
+
+// A provider gc has no screen signature for gets live wait-idle delivery
+// exactly when the runtime reads the program's own report at the input
+// boundary: typed at once, with no screen-scan wait. A reported running turn
+// or pending dialog queues it (no_idle_boundary) and an unknown report hands
+// it back as provider_unsupported; neither types anything.
+func TestRuntimeHandleNudgeWaitIdleReportedBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		boundary    runtime.IdleBoundary
+		delivered   bool
+		undelivered NudgeUndeliveredReason
+	}{
+		{boundary: runtime.IdleBoundaryAt, delivered: true},
+		{boundary: runtime.IdleBoundaryBusy, undelivered: NudgeUndeliveredNoIdleBoundary},
+		{boundary: runtime.IdleBoundaryPending, undelivered: NudgeUndeliveredNoIdleBoundary},
+		{boundary: runtime.IdleBoundaryUnknown, undelivered: NudgeUndeliveredProviderUnsupported},
+	} {
+		t.Run(tc.boundary.String(), func(t *testing.T) {
+			fake := runtime.NewFake()
+			if err := fake.Start(context.Background(), "legacy-worker", runtime.Config{}); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			fake.WaitForIdleErrors["legacy-worker"] = nil
+			handle, err := NewRuntimeHandle(RuntimeHandleConfig{
+				Provider:     &reportedBoundaryFake{Fake: fake, boundary: tc.boundary},
+				SessionName:  "legacy-worker",
+				ProviderName: "omp",
+			})
+			if err != nil {
+				t.Fatalf("NewRuntimeHandle: %v", err)
+			}
+			result, err := handle.Nudge(context.Background(), handleActor(t, handle, sessionpkg.ActorAgent), NudgeRequest{
+				Text:     "check deploy status",
+				Delivery: NudgeDeliveryWaitIdle,
+				Source:   "mail",
+			})
+			if err != nil {
+				t.Fatalf("Nudge(wait_idle): %v", err)
+			}
+			if result.Delivered != tc.delivered || result.Undelivered != tc.undelivered {
+				t.Fatalf("Nudge(wait_idle) = %+v, want delivered=%t undelivered=%q", result, tc.delivered, tc.undelivered)
+			}
+			if n := fake.CountCalls("WaitForIdle", "legacy-worker"); n != 0 {
+				t.Fatalf("WaitForIdle calls = %d, want none: the screen scan is not calibrated for this provider", n)
+			}
+			typed := firstCall(fake.Calls, "NudgeNow")
+			if (typed != nil) != tc.delivered {
+				t.Fatalf("typed = %t, want %t", typed != nil, tc.delivered)
+			}
+			if typed != nil && !strings.Contains(typed.Message, "[mail] check deploy status") {
+				t.Fatalf("delivered message = %q, want source-tagged reminder content", typed.Message)
+			}
+		})
+	}
+}
+
+// Claude's wait-idle delivery is the screen-scan wait, whatever the program
+// reports: a reported running turn neither queues nor skips its wait.
+func TestRuntimeHandleNudgeWaitIdleClaudeIgnoresReportedBoundary(t *testing.T) {
+	fake := runtime.NewFake()
+	if err := fake.Start(context.Background(), "legacy-worker", runtime.Config{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	fake.WaitForIdleErrors["legacy-worker"] = nil
+	handle, err := NewRuntimeHandle(RuntimeHandleConfig{
+		Provider:     &reportedBoundaryFake{Fake: fake, boundary: runtime.IdleBoundaryBusy},
+		SessionName:  "legacy-worker",
+		ProviderName: "claude",
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeHandle: %v", err)
+	}
+	result, err := handle.Nudge(context.Background(), handleActor(t, handle, sessionpkg.ActorAgent), NudgeRequest{
+		Text:     "check deploy status",
+		Delivery: NudgeDeliveryWaitIdle,
+	})
+	if err != nil {
+		t.Fatalf("Nudge(wait_idle): %v", err)
+	}
+	if !result.Delivered {
+		t.Fatalf("Nudge(wait_idle) = %+v, want delivered through the screen-scan wait", result)
+	}
+	if fake.CountCalls("WaitForIdle", "legacy-worker") != 1 {
+		t.Fatalf("calls = %#v, want one WaitForIdle", fake.Calls)
+	}
+}
+
+// A provider without an idle signal (no screen signature, no reported
+// program state) is not typed into: provider_unsupported, nothing waited on
+// or typed.
+func TestRuntimeHandleNudgeWaitIdleWithoutIdleSignalReturnsUndelivered(t *testing.T) {
 	sp := runtime.NewFake()
 	if err := sp.Start(context.Background(), "legacy-worker", runtime.Config{}); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -2222,12 +2323,12 @@ func TestRuntimeHandleNudgeWaitIdleUnsupportedProviderReturnsUndelivered(t *test
 	if err != nil {
 		t.Fatalf("Nudge(wait_idle): %v", err)
 	}
-	if result.Delivered {
-		t.Fatal("Nudge(wait_idle) Delivered = true, want false for unsupported provider")
+	if result.Delivered || result.Undelivered != NudgeUndeliveredProviderUnsupported {
+		t.Fatalf("Nudge(wait_idle) = %+v, want undelivered %q without an idle signal", result, NudgeUndeliveredProviderUnsupported)
 	}
 	for _, call := range sp.Calls {
 		if call.Method == "WaitForIdle" || call.Method == "Nudge" || call.Method == "NudgeNow" {
-			t.Fatalf("calls = %#v, want no delivery for unsupported provider", sp.Calls)
+			t.Fatalf("calls = %#v, want no delivery without an idle signal", sp.Calls)
 		}
 	}
 }

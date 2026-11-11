@@ -150,6 +150,21 @@ func (p *Provider) ProgramStatusHoldRead(name string) (runtime.ProgramHoldReadin
 
 var _ runtime.ProgramStatusHoldProvider = (*Provider)(nil)
 
+// ReportedIdleBoundary implements [runtime.ReportedIdleBoundaryProvider]:
+// the idle boundary one fresh decision read of session name's agent pane
+// reports ([runtime.ProgramIdleBoundary]), past the state cache. It needs no
+// hold declaration. Under off or shadow, or when the read fails, nothing
+// decides and it reads unknown.
+func (p *Provider) ReportedIdleBoundary(name string) runtime.IdleBoundary {
+	r, _, ok := p.tm.decisionRead(name)
+	if !ok {
+		return runtime.IdleBoundaryUnknown
+	}
+	return runtime.ProgramIdleBoundary(r, time.Now())
+}
+
+var _ runtime.ReportedIdleBoundaryProvider = (*Provider)(nil)
+
 // declarePane converges pane's hold and settle declarations to want's,
 // guarded by the nonce heal read on it: tmux runs the change only while the
 // pane still carries that nonce, so a pane re-armed or disarmed in between
