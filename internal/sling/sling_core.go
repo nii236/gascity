@@ -917,6 +917,7 @@ func finalizeInStore(opts SlingOpts, deps SlingDeps, beadStore beads.MoleculeTar
 	}
 	telemetry.RecordSling(context.Background(), a.QualifiedName(), TargetType(&a), method, nil)
 	clearGraphTakeoverRoute(deps, bead, &result)
+	routeExpandedWorkflowSteps(deps, beadStore, bead, a, &result)
 
 	// Merge strategy metadata. With no --merge flag this falls back to the
 	// rig's configured default, so a bare sling on a rig that delivers through
@@ -1153,6 +1154,50 @@ func clearGraphTakeoverRoute(deps SlingDeps, b beads.Bead, result *SlingResult) 
 	if err := deps.Store.SetMetadata(b.ID, beadmeta.ExecutionRoutedToMetadataKey, ""); err != nil {
 		result.MetadataErrors = append(result.MetadataErrors,
 			fmt.Sprintf("clearing %s on %s: %v", beadmeta.ExecutionRoutedToMetadataKey, b.ID, err))
+	}
+}
+
+// routeExpandedWorkflowSteps routes the open, unrouted steps of an expanded
+// graph.v2 root to the sling target, as `gc sling --formula` routes them at
+// creation. A cooked root (`gc formula cook`) carries default-bound steps with
+// no route, and the expanded root itself is never demand (#7497), so routing
+// only the root would leave an on-demand target asleep (#9039). Topology
+// latches stay unrouted, steps the formula routed keep their route, and a
+// control step gets only the execution route it carries for its attempts.
+// Advisory like the merge-strategy stamp: the root is already routed.
+func routeExpandedWorkflowSteps(deps SlingDeps, store beads.MoleculeTarget, root beads.Bead, a config.Agent, result *SlingResult) {
+	if root.ID == "" || store.Absent() ||
+		strings.TrimSpace(root.Metadata[beadmeta.KindMetadataKey]) != beadmeta.KindWorkflow ||
+		strings.TrimSpace(root.Metadata[beadmeta.WorkflowExpandedMetadataKey]) != "true" {
+		return
+	}
+	target := agentutil.NormalizePoolRouteTarget(deps.Cfg, strings.TrimSpace(agentutil.RoutedToIdentity(&a)))
+	if target == "" {
+		return
+	}
+	steps, err := sourceworkflow.ListWorkflowBeads(store, root.ID)
+	if err != nil {
+		result.MetadataErrors = append(result.MetadataErrors,
+			fmt.Sprintf("listing steps of workflow %s: %v", root.ID, err))
+		return
+	}
+	for _, step := range steps {
+		kind := strings.TrimSpace(step.Metadata[beadmeta.KindMetadataKey])
+		if step.ID == root.ID || step.Status == "closed" || strings.TrimSpace(step.Assignee) != "" ||
+			graphroute.IsWorkflowTopologyKind(kind) {
+			continue
+		}
+		key := beadmeta.RoutedToMetadataKey
+		if graphroute.IsControlDispatcherKind(kind) {
+			key = beadmeta.ExecutionRoutedToMetadataKey
+		}
+		if strings.TrimSpace(step.Metadata[key]) != "" {
+			continue
+		}
+		if err := store.SetMetadata(step.ID, key, target); err != nil {
+			result.MetadataErrors = append(result.MetadataErrors,
+				fmt.Sprintf("routing workflow step %s (%s=%s): %v", step.ID, key, target, err))
+		}
 	}
 }
 
